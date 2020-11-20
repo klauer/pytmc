@@ -14,6 +14,7 @@ import lxml.etree
 
 from .code import (determine_block_type, get_pou_call_blocks,
                    program_name_from_declaration, variables_from_declaration)
+from .compat import cached_property
 
 # Registry of all TwincatItem-based classes
 TWINCAT_TYPES = {}
@@ -195,7 +196,7 @@ class TwincatItem:
         'Hook for subclasses; called after __init__'
         ...
 
-    @property
+    @cached_property
     def root(self):
         'The top-level TwincatItem (likely TcSmProject)'
         parent = self
@@ -203,7 +204,7 @@ class TwincatItem:
             parent = parent.parent
         return parent
 
-    @property
+    @cached_property
     def path(self):
         'Path of classes required to get to this instance'
         hier = [self]
@@ -399,7 +400,7 @@ class _LazyLoadPlaceholder:
     def find(self, cls, *, recurse=True):
         yield from ()
 
-    @property
+    @cached_property
     def key(self):
         filename = self.element.attrib['File'].lower()
         identifier = self.element.attrib['Id']
@@ -415,7 +416,7 @@ class _LazyLoadPlaceholder:
 class _TwincatProjectSubItem(TwincatItem):
     '[XTI/TMC/...] A base class for items that appear in virtual PLC projects'
 
-    @property
+    @cached_property
     def plc(self):
         'The nested project (virtual PLC project) associated with the item'
         return self.find_ancestor(Plc)
@@ -468,14 +469,14 @@ class Link(TwincatItem):
 class TopLevelProject(TwincatItem):
     '[tsproj] Containing Io, System, Motion, TopLevelPlc, etc.'
 
-    @property
+    @cached_property
     def ams_id(self):
         '''
         The AMS ID of the configured target
         '''
         return self.attributes.get('TargetNetId', '')
 
-    @property
+    @cached_property
     def target_ip(self):
         '''
         A guess of the target IP, based on the AMS ID
@@ -496,17 +497,17 @@ class TcSmProject(TwincatItem):
         self.top_level_plc, = list(self.find(TopLevelPlc, recurse=False))
 
     @property
-    def plcs(self):
+    def plcs(self) -> typing.Generator[PlcProject, None, None]:
         'The virtual PLC projects contained in this TcSmProject'
         yield from self.top_level_plc.projects.values()
 
     @property
-    def plcs_by_name(self):
+    def plcs_by_name(self) -> dict:
         'The virtual PLC projects in a dictionary keyed by name'
         return {plc.name: plc for plc in self.plcs}
 
     @property
-    def plcs_by_link_name(self):
+    def plcs_by_link_name(self) -> dict:
         'The virtual PLC projects in a dictionary keyed by link name'
         return {plc.link_name: plc for plc in self.plcs}
 
@@ -681,28 +682,29 @@ class Plc(TwincatItem):
         self.namespaces.update(self.gvl_by_name)
         self.namespaces.update(self.dut_by_name)
 
-    @property
+    @cached_property
     def links(self):
-        return [link
-                for mapping in self.Mappings
-                for link in mapping.find(Link, recurse=False)
-                ]
+        return tuple(
+            link
+            for mapping in self.Mappings
+            for link in mapping.find(Link, recurse=False)
+        )
 
-    @property
+    @cached_property
     def port(self):
         '''
         The ADS port for the project
         '''
         return self.attributes.get('AmsPort', '')
 
-    @property
+    @cached_property
     def ams_id(self):
         '''
         The AMS ID of the configured target
         '''
         return self.find_ancestor(TopLevelProject).ams_id
 
-    @property
+    @cached_property
     def target_ip(self):
         '''
         A guess of the target IP, based on the AMS ID
@@ -747,7 +749,7 @@ class Compile(TwincatItem):
 
 class _TmcItem(_TwincatProjectSubItem):
     '[TMC] Any item found in a TMC file'
-    @property
+    @cached_property
     def tmc(self):
         'The TcModuleClass (TMC) associated with the item'
         return self.find_ancestor(TcModuleClass)
@@ -775,7 +777,7 @@ class Type(_TmcItem):
     '[TMC] DataTypes/DataType/SubItem/Type'
 
     @property
-    def info(self):
+    def info(self) -> dict:
         return dict(
             guid=self.attributes.get("GUID", None),
             type_name=self.type_name,
@@ -786,36 +788,36 @@ class Type(_TmcItem):
             is_pointer=self.is_pointer,
         )
 
-    @property
+    @cached_property
     def guid(self) -> str:
         """The referenced type name."""
         return self.attributes.get("GUID", None)
 
-    @property
+    @cached_property
     def type_name(self) -> str:
         """The referenced type name."""
         return self.text
 
-    @property
+    @cached_property
     def namespace(self):
         return self.attributes.get("Namespace", None)
 
-    @property
+    @cached_property
     def pointer_depth(self) -> int:
         pointerto_value = self.attributes.get("PointerTo", None)
         return int(pointerto_value or '0')
 
-    @property
+    @cached_property
     def is_pointer(self) -> bool:
         return self.pointer_depth > 0
 
-    @property
+    @cached_property
     def is_reference(self) -> bool:
         ref_value = self.attributes.get("ReferenceTo", None)
         return (ref_value or '').lower() in _TRUE_VALUES
 
     @property
-    def qualified_type_name(self):
+    def qualified_type_name(self) -> str:
         'The base type, including the namespace'
         namespace = self.namespace
         return f'{namespace}.{self.text}' if namespace else self.text
@@ -830,11 +832,11 @@ class EnumInfo(_TmcItem):
     Enum: list
     Comment: list
 
-    @property
+    @cached_property
     def enum_text(self):
         return self.Text[0].text
 
-    @property
+    @cached_property
     def enum_value(self):
         try:
             return self.Enum[0].text
@@ -848,7 +850,7 @@ class EnumInfo(_TmcItem):
         )
         return ''
 
-    @property
+    @cached_property
     def enum_comment(self):
         return self.Comment[0].text if hasattr(self, 'Comment') else ''
 
@@ -875,12 +877,12 @@ class ArrayInfo(_TmcItem):
         self.bounds = (lbound, ubound)
         self.elements = elements
 
-    @property
+    @cached_property
     def is_reference(self):
         ref_value = self.attributes.get("ReferenceTo", None)
         return (ref_value or '').lower() in _TRUE_VALUES
 
-    @property
+    @cached_property
     def pointer_depth(self) -> int:
         # 0 = Non-pointer
         # 1 = POINTER TO
@@ -889,11 +891,11 @@ class ArrayInfo(_TmcItem):
         pointerto_value = self.attributes.get("PointerTo", None)
         return int(pointerto_value or '0')
 
-    @property
+    @cached_property
     def is_pointer(self) -> bool:
         return self.pointer_depth > 0
 
-    @property
+    @cached_property
     def level(self):
         'ARRAY [] OF ARRAY [] level'
         return self.attributes.get("Level", None)
@@ -902,14 +904,14 @@ class ArrayInfo(_TmcItem):
 class ExtendsType(_TmcItem):
     '[TMC] A marker of inheritance / extension, found on DataType'
 
-    @property
+    @cached_property
     def namespace(self):
         """
         Namespace of the data type.
         """
         return self.attributes.get('Namespace', None)
 
-    @property
+    @cached_property
     def guid(self):
         """
         Globally unique identifier for the data type.
@@ -923,12 +925,12 @@ class ExtendsType(_TmcItem):
         except KeyError:
             raise AttributeError('GUID unavailable') from None
 
-    @property
+    @cached_property
     def qualified_type_name(self):
         namespace = self.namespace
         return f'{namespace}.{self.text}' if namespace else self.text
 
-    @property
+    @cached_property
     def type_name(self):
         """The type name, without a namespace."""
         return self.text
@@ -954,7 +956,7 @@ class DataType(_TmcItem):
     SubItem: typing.List['SubItem']
     Unit: typing.List[_TmcItem]
 
-    @property
+    @cached_property
     def guid(self):
         """
         Globally unique identifier for the data type.
@@ -968,15 +970,15 @@ class DataType(_TmcItem):
         except KeyError:
             raise AttributeError('GUID unavailable')
 
-    @property
+    @cached_property
     def array_info(self) -> typing.Optional[ArrayInfo]:
         return getattr(self, 'ArrayInfo', [None])[0]
 
-    @property
+    @cached_property
     def array_bounds(self) -> typing.Optional[typing.Tuple[int, int]]:
         return getattr(self.array_info, 'array_bounds', None)
 
-    @property
+    @cached_property
     def summary_type_name(self):
         summary = self.name
         array_bounds = self.array_bounds
@@ -985,7 +987,7 @@ class DataType(_TmcItem):
         return summary
 
     @property
-    def qualified_type_name(self):
+    def qualified_type_name(self) -> str:
         name_attrs = self.Name[0].attributes
         if 'Namespace' in name_attrs:
             return f'{name_attrs["Namespace"]}.{self.name}'
@@ -1000,7 +1002,7 @@ class DataType(_TmcItem):
             array_info=array_info
         )
 
-    @property
+    @cached_property
     def base_type(self):
         base_type = getattr(self, 'BaseType', [None])[0]
         if base_type is None:
@@ -1008,7 +1010,7 @@ class DataType(_TmcItem):
 
         return self._get_data_type(base_type)
 
-    @property
+    @cached_property
     def is_complex_type(self):
         base_type = self.base_type
         if base_type is None:
@@ -1036,28 +1038,28 @@ class DataType(_TmcItem):
                     yield [subitem] + item
 
     @property
-    def enum_dict(self):
+    def enum_dict(self) -> dict:
         return {int(item.enum_value): item.enum_text
                 for item in getattr(self, 'EnumInfo', [])}
 
-    @property
+    @cached_property
     def is_enum(self):
         return len(getattr(self, 'EnumInfo', [])) > 0
 
-    @property
+    @cached_property
     def is_array(self):
         return len(getattr(self, 'ArrayInfo', [])) > 0
 
-    @property
+    @cached_property
     def is_string(self):
         return False
 
-    @property
+    @cached_property
     def length(self):
         array_info = self.array_info
         return array_info.elements if array_info else 1
 
-    @property
+    @cached_property
     def bit_size(self):
         return int(self.BitSize[0].text)
 
@@ -1087,7 +1089,7 @@ class BoundDataType:
             f'is_reference={self.is_reference}>'
         )
 
-    @property
+    @cached_property
     def summary_type_name(self):
         summary = self.name
         if self.is_pointer:
@@ -1107,29 +1109,29 @@ class BoundDataType:
 
 
 class Name(_TmcItem):
-    @property
+    @cached_property
     def guid(self) -> str:
         return self.attributes.get('GUID', None)
 
-    @property
+    @cached_property
     def namespace(self) -> str:
         return self.attributes.get('Namespace', None)
 
-    @property
+    @cached_property
     def tc_base_type(self) -> bool:
         try:
             return self.attributes['TcBaseType'] in _TRUE_VALUES
         except KeyError:
             ...
 
-    @property
+    @cached_property
     def hide_type(self) -> bool:
         try:
             return self.attributes['HideType'] in _TRUE_VALUES
         except KeyError:
             ...
 
-    @property
+    @cached_property
     def iec_declaration(self) -> str:
         return self.attributes.get('IecDeclaration', None)
 
@@ -1141,36 +1143,36 @@ class SubItem(_TmcItem):
     BitSize: typing.List[_TmcItem]
     BitOffs: typing.List[_TmcItem]
 
-    @property
+    @cached_property
     def data_type(self):
         return get_data_type_by_reference(
             self.Type[0], (self.tmc, self.find_ancestor(TcSmProject)),
             array_info=self.array_info,
         )
 
-    @property
+    @cached_property
     def array_info(self):
         try:
             return self.ArrayInfo[0]
         except (AttributeError, IndexError):
             return None
 
-    @property
+    @cached_property
     def type(self):
         'The base type'
         return self.Type[0].text
 
-    @property
+    @cached_property
     def bit_size(self):
         'The sub item size, in bits'
         return int(self.BitSize[0].bit_size)
 
-    @property
+    @cached_property
     def bit_offset(self):
         'The sub item offset, in bits'
         return int(self.BitOffs[0].bit_offset)
 
-    @property
+    @cached_property
     def qualified_type_name(self):
         'The base type, including the namespace'
         type_ = self.Type[0]
@@ -1189,18 +1191,13 @@ class Module(_TmcItem):
     Contains generated symbols, data areas, and miscellaneous properties.
     '''
 
-    @property
+    @cached_property
     def ads_port(self):
         'The ADS port assigned to the Virtual PLC'
-        try:
-            return self._ads_port
-        except AttributeError:
-            app_prop, = [prop for prop in self.find(Property)
-                         if prop.name == 'ApplicationName']
-            port_text = app_prop.value
-            self._ads_port = int(port_text.split('Port_')[1])
-
-        return self._ads_port
+        app_prop, = [prop for prop in self.find(Property)
+                     if prop.name == 'ApplicationName']
+        port_text = app_prop.value
+        return int(port_text.split('Port_')[1])
 
 
 class Property(_TmcItem):
@@ -1216,12 +1213,12 @@ class Property(_TmcItem):
     '''
     Value: list
 
-    @property
+    @cached_property
     def key(self):
         'The property key name'
         return self.name
 
-    @property
+    @cached_property
     def value(self):
         'The property value text'
         return self.Value[0].text if hasattr(self, 'Value') else self.text
@@ -1244,35 +1241,35 @@ class BuiltinDataType:
         self.name = typename
         self.length = length
 
-    @property
+    @cached_property
     def qualified_type_name(self):
         # Built-in types have no namespace prefix
         return self.name
 
-    @property
+    @cached_property
     def summary_type_name(self):
         if self.length > 1:
             return f'{self.name}({self.length})'
         return self.name
 
-    @property
+    @cached_property
     def is_complex_type(self):
         return False
 
     @property
-    def enum_dict(self):
+    def enum_dict(self) -> dict:
         return {int(item.enum_value): item.enum_text
                 for item in getattr(self, 'EnumInfo', [])}
 
-    @property
+    @cached_property
     def is_enum(self):
         return len(getattr(self, 'EnumInfo', [])) > 0
 
-    @property
+    @cached_property
     def is_string(self):
         return self.name == 'STRING'
 
-    @property
+    @cached_property
     def is_array(self):
         # TODO: you can have an array of STRING(80), for example
         # the length would be reported as 80 here, and the DataType would have
@@ -1289,13 +1286,13 @@ class T_MaxString(BuiltinDataType):
 
 
 class BitSize(_TmcItem):
-    @property
+    @cached_property
     def bit_size(self) -> int:
         return int(self.text)
 
 
 class BitOffs(_TmcItem):
-    @property
+    @cached_property
     def bit_offset(self) -> int:
         return int(self.text)
 
@@ -1315,35 +1312,35 @@ class Symbol(_TmcItem):
     BitSize: typing.List[_TmcItem]
     Properties: typing.List[_TmcItem]
 
-    @property
+    @cached_property
     def base_type(self) -> BaseType:
         'The reference used to determine the data type (BaseType)'
         return self.BaseType[0]
 
-    @property
+    @cached_property
     def type_name(self) -> str:
         'The base type name.'
         return self.base_type.text
 
-    @property
+    @cached_property
     def qualified_type_name(self) -> str:
         'The base type name, including the namespace'
         return self.data_type.qualified_type
 
-    @property
+    @cached_property
     def data_type(self) -> DataType:
         return get_data_type_by_reference(
             self.base_type, (self.tmc, self.find_ancestor(TcSmProject)),
             reference=self.is_reference, pointer=self.is_pointer,
         )
 
-    @property
+    @cached_property
     def module(self) -> Module:
         'The TMC Module containing the Symbol'
         return self.find_ancestor(Module)
 
     @property
-    def info(self):
+    def info(self) -> dict:
         return dict(name=self.name,
                     bit_size=self.BitSize[0].text,
                     bit_offs=self.BitOffs[0].text,
@@ -1358,11 +1355,11 @@ class Symbol(_TmcItem):
             for item in self.data_type.walk(condition=condition):
                 yield [self] + item
 
-    @property
+    @cached_property
     def array_info(self):
         return getattr(self, 'ArrayInfo', [None])[0]
 
-    @property
+    @cached_property
     def array_bounds(self):
         return getattr(self.array_info, 'array_bounds', None)
 
@@ -1378,15 +1375,15 @@ class Symbol(_TmcItem):
                    for owner, var in link.link):
                 yield link
 
-    @property
+    @cached_property
     def is_reference(self):
         return self.base_type.is_reference
 
-    @property
+    @cached_property
     def is_pointer(self):
         return self.base_type.is_pointer
 
-    @property
+    @cached_property
     def summary_type_name(self):
         return self.data_type.summary_type_name
 
@@ -1404,17 +1401,17 @@ class Symbol_DUT_MotionStage(Symbol):
 
         return repr_info
 
-    @property
+    @cached_property
     def program_name(self):
         '`Main` of `Main.M1`'
         return self.name.split('.')[0]
 
-    @property
+    @cached_property
     def motor_name(self):
         '`M1` of `Main.M1`'
         return self.name.split('.')[1]
 
-    @property
+    @cached_property
     def nc_to_plc_link(self):
         '''
         The Link for NcToPlc
@@ -1433,7 +1430,7 @@ class Symbol_DUT_MotionStage(Symbol):
         link, = links
         return link
 
-    @property
+    @cached_property
     def nc_axis(self):
         'The NC `Axis` associated with the DUT_MotionStage'
         link = self.nc_to_plc_link
@@ -1453,7 +1450,7 @@ class Symbol_DUT_MotionStage(Symbol):
 class GVL(_TwincatProjectSubItem):
     '[TcGVL] A Global Variable List'
 
-    @property
+    @cached_property
     def declaration(self):
         'The declaration code; i.e., the top portion in visual studio'
         return self.Declaration[0].text
@@ -1478,7 +1475,7 @@ class Declaration(_TwincatProjectSubItem):
 class DUT(_TwincatProjectSubItem):
     '[TcDUT] Data unit type (DUT)'
 
-    @property
+    @cached_property
     def declaration(self):
         'The declaration code; i.e., the top portion in visual studio'
         return self.Declaration[0].text
@@ -1491,14 +1488,14 @@ class DUT(_TwincatProjectSubItem):
 class Action(_TwincatProjectSubItem):
     '[TcPOU] Code declaration for actions'
 
-    @property
+    @cached_property
     def source_code(self):
         return f'''\
 ACTION {self.name}:
 {self.implementation or ''}
 END_ACTION'''
 
-    @property
+    @cached_property
     def implementation(self):
         'The implementation code; i.e., the bottom portion in visual studio'
         impl = self.Implementation[0]
@@ -1522,22 +1519,22 @@ class POU(_TwincatProjectSubItem):
 
         return f'{self.name}.{name}'
 
-    @property
+    @cached_property
     def declaration(self):
         'The declaration code; i.e., the top portion in visual studio'
         return self.Declaration[0].text
 
-    @property
+    @cached_property
     def implementation(self):
         'The implementation code; i.e., the bottom portion in visual studio'
         impl = self.Implementation[0]
         if hasattr(impl, 'ST'):
             return impl.ST[0].text
 
-    @property
-    def actions(self):
+    @cached_property
+    def actions(self) -> tuple:
         'The action implementations (zero or more)'
-        return list(getattr(self, 'Action', []))
+        return tuple(getattr(self, 'Action', []))
 
     def get_source_code(self, *, close_block=True):
         'The full source code - declaration, implementation, and actions'
@@ -1564,18 +1561,18 @@ class POU(_TwincatProjectSubItem):
 
         return '\n'.join(source_code)
 
-    @property
+    @cached_property
     def call_blocks(self):
         'A dictionary of all implementation call blocks'
         return get_pou_call_blocks(self.declaration, self.implementation)
 
-    @property
+    @cached_property
     def program_name(self):
         'The program name, determined from the declaration'
         return program_name_from_declaration(self.declaration)
 
     @property
-    def variables(self):
+    def variables(self) -> dict:
         'A dictionary of variables defined in the POU'
         return variables_from_declaration(self.declaration)
 
@@ -1611,11 +1608,11 @@ class Axis(TwincatItem):
     '[XTI] A single NC axis'
     _load_path_hint = pathlib.Path('Axes')
 
-    @property
+    @cached_property
     def axis_number(self):
         return int(self.attributes['Id'])
 
-    @property
+    @cached_property
     def units(self):
         try:
             for axis_para in getattr(self, 'AxisPara', []):
